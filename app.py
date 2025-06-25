@@ -51,7 +51,7 @@ def extract_features(audio, sr):
     features.append(delta2_mfccs.T)  # Shape: (time_steps, 20)
     
     # 4. Chroma features (12 coefficients - matching training)
-    chroma = librosa.feature.chroma(y=audio, sr=sr, n_chroma=12)
+    chroma = librosa.feature.chroma_stft(y=audio, sr=sr, n_chroma=12)
     features.append(chroma.T)  # Shape: (time_steps, 12)
     
     # 5. Spectral contrast (6 bands - matching training)
