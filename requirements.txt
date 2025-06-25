@@ -9,3 +9,5 @@ scipy
 pandas
 matplotlib
 seaborn
+streamlit-webrtc
+pydub
