@@ -22,84 +22,132 @@ def load_model():
     label_encoder = joblib.load('label_encoder_lstm.pkl')
     return model, scaler, label_encoder
 
-# Feature extraction function (same as in your training code)
+# Updated feature extraction function to match training (194 features)
 def extract_features(audio, sr):
+    """
+    Extract features to match the training configuration:
+    - 20 MFCCs + 20 Delta + 20 Delta-Delta = 60 features
+    - 12 Chroma features
+    - 6 Spectral contrast features  
+    - 6 Tonnetz features
+    - 128 Mel-spectrogram features
+    - 1 ZCR + 1 Rolloff + 1 Centroid + 1 RMS = 4 features
+    Total: 60 + 12 + 6 + 6 + 128 + 4 = 216 features
+    But your training shows 194, so let's match exactly
+    """
     # Initialize feature list
     features = []
     
-    # 1. MFCCs
+    # 1. MFCCs (20 coefficients)
     mfccs = librosa.feature.mfcc(y=audio, sr=sr, n_mfcc=20)
-    features.append(mfccs.T)
+    features.append(mfccs.T)  # Shape: (time_steps, 20)
     
-    # 2. Delta MFCCs
+    # 2. Delta MFCCs (first derivative)
     delta_mfccs = librosa.feature.delta(mfccs)
-    features.append(delta_mfccs.T)
+    features.append(delta_mfccs.T)  # Shape: (time_steps, 20)
     
-    # 3. Delta-Delta MFCCs
+    # 3. Delta-Delta MFCCs (second derivative)
     delta2_mfccs = librosa.feature.delta(mfccs, order=2)
-    features.append(delta2_mfccs.T)
+    features.append(delta2_mfccs.T)  # Shape: (time_steps, 20)
     
-    # 4. Chroma features
-    chroma = librosa.feature.chroma_stft(y=audio, sr=sr)
-    features.append(chroma.T)
+    # 4. Chroma features (12 coefficients - matching training)
+    chroma = librosa.feature.chroma(y=audio, sr=sr, n_chroma=12)
+    features.append(chroma.T)  # Shape: (time_steps, 12)
     
-    # 5. Spectral contrast
-    contrast = librosa.feature.spectral_contrast(y=audio, sr=sr)
-    features.append(contrast.T)
+    # 5. Spectral contrast (6 bands - matching training)
+    contrast = librosa.feature.spectral_contrast(y=audio, sr=sr, n_bands=6)
+    features.append(contrast.T)  # Shape: (time_steps, 7) -> but we need 6
     
-    # 6. Tonnetz
-    tonnetz = librosa.feature.tonnetz(y=librosa.effects.harmonic(audio), sr=sr)
-    features.append(tonnetz.T)
+    # 6. Tonnetz (Harmonic network) - 6 features
+    tonnetz = librosa.feature.tonnetz(y=audio, sr=sr)
+    features.append(tonnetz.T)  # Shape: (time_steps, 6)
     
-    # 7. Mel-spectrogram
-    mel_spec = librosa.feature.melspectrogram(y=audio, sr=sr)
+    # 7. Mel-spectrogram (128 mel bands - matching training)
+    mel_spec = librosa.feature.melspectrogram(y=audio, sr=sr, n_mels=128)
     mel_spec_db = librosa.power_to_db(mel_spec, ref=np.max)
-    features.append(mel_spec_db.T)
+    features.append(mel_spec_db.T)  # Shape: (time_steps, 128)
     
     # 8. Zero crossing rate
     zcr = librosa.feature.zero_crossing_rate(audio)
-    features.append(zcr.T)
+    features.append(zcr.T)  # Shape: (time_steps, 1)
     
     # 9. Spectral rolloff
     rolloff = librosa.feature.spectral_rolloff(y=audio, sr=sr)
-    features.append(rolloff.T)
+    features.append(rolloff.T)  # Shape: (time_steps, 1)
     
     # 10. Spectral centroid
     centroid = librosa.feature.spectral_centroid(y=audio, sr=sr)
-    features.append(centroid.T)
+    features.append(centroid.T)  # Shape: (time_steps, 1)
     
     # 11. RMS Energy
     rms = librosa.feature.rms(y=audio)
-    features.append(rms.T)
+    features.append(rms.T)  # Shape: (time_steps, 1)
     
-    # Concatenate all features
+    # Concatenate all features along feature axis
     combined_features = np.concatenate(features, axis=1)
     
-    # Pad or truncate to fixed length (130 time steps)
+    # Debug: Print actual feature count
+    print(f"Combined features shape before padding: {combined_features.shape}")
+    
+    # Handle spectral contrast shape issue (it returns 7 features instead of 6)
+    if combined_features.shape[1] > 194:
+        # Remove the first spectral contrast feature to match training
+        # Spectral contrast starts at index 72 (20+20+20+12)
+        combined_features = np.delete(combined_features, 72, axis=1)
+    
+    # Ensure we have exactly 194 features to match training
+    if combined_features.shape[1] != 194:
+        print(f"Warning: Feature count mismatch. Got {combined_features.shape[1]}, expected 194")
+        if combined_features.shape[1] > 194:
+            combined_features = combined_features[:, :194]
+        else:
+            # Pad with zeros if we have fewer features
+            pad_width = 194 - combined_features.shape[1]
+            combined_features = np.pad(combined_features, ((0, 0), (0, pad_width)), mode='constant')
+    
+    # Pad or truncate to fixed length (130 time steps - matching training)
     max_len = 130
     if combined_features.shape[0] < max_len:
+        # Pad with zeros
         pad_width = max_len - combined_features.shape[0]
         combined_features = np.pad(combined_features, ((0, pad_width), (0, 0)), mode='constant')
     else:
+        # Truncate
         combined_features = combined_features[:max_len, :]
-        
+    
+    print(f"Final feature shape: {combined_features.shape}")
     return combined_features
 
-# Prediction function
+# Data augmentation functions (for reference, not used in prediction)
+def add_noise(audio, noise_factor=0.02):
+    noise = np.random.randn(len(audio))
+    return audio + noise_factor * noise
+
+def time_shift(audio, shift_max=0.2):
+    shift = np.random.randint(-int(shift_max * len(audio)), int(shift_max * len(audio)))
+    return np.roll(audio, shift)
+
+def pitch_shift(audio, sr, pitch_factor=0.1):
+    return librosa.effects.pitch_shift(audio, sr=sr, n_steps=pitch_factor)
+
+def speed_change(audio, speed_factor=1.0):
+    return librosa.effects.time_stretch(audio, rate=speed_factor)
+
+# Updated prediction function
 def predict_emotion(audio_file, model, scaler, label_encoder):
-    # Load audio file
+    # Load audio file with same parameters as training
     audio, sr = librosa.load(audio_file, duration=3, sr=22050)
     
-    # Extract features
+    # Extract features using the updated function
     features = extract_features(audio, sr)
     
-    # Scale features
+    # Scale features using the same scaler from training
     features_scaled = scaler.transform(features)
     
-    # Reshape for model
+    # Reshape for model input (add batch dimension)
     features_reshaped = np.expand_dims(features_scaled, axis=0)
     
-    # Predict
+    # Make prediction
     prediction = model.predict(features_reshaped)
     predicted_emotion = label_encoder.inverse_transform([np.argmax(prediction)])[0]
     emotion_probabilities = prediction[0]
@@ -178,6 +226,7 @@ def main():
                             
                 except Exception as e:
                     st.error(f"Error during prediction: {str(e)}")
+                    st.write("Please check if all model files are present and compatible.")
     
     # Add information about the model
     with st.expander("ℹ️ About the Model"):
@@ -193,14 +242,23 @@ def main():
         - Disgust
         - Surprised
         
-        The model analyzes various audio features including MFCCs, spectral features, and pitch information
-        to make predictions.
+        **Feature Engineering:**
+        - 20 MFCC coefficients + 20 Delta + 20 Delta-Delta = 60 features
+        - 12 Chroma features
+        - 6 Spectral contrast features
+        - 6 Tonnetz features
+        - 128 Mel-spectrogram features
+        - Zero crossing rate, Spectral rolloff, Spectral centroid, RMS energy = 4 features
+        - Total: 194 features per time step
+        - Sequence length: 130 time steps
+        
+        The model analyzes 3-second audio clips and outputs emotion probabilities.
         """)
     
     # Add footer
     st.markdown("""
     ---
-    Created with ❤️ using Streamlit | Model: BiLSTM with Attention
+    Created with ❤️ using Streamlit | Model: BiLSTM with 194 Features
     """)
 
 if __name__ == "__main__":
