@@ -17,9 +17,9 @@ st.set_page_config(
 # Load the saved models and objects
 @st.cache_resource
 def load_model():
-    model = tf.keras.models.load_model('emotion_model/best_emotion_lstm_model.h5')
-    scaler = joblib.load('emotion_model/feature_scaler_lstm.pkl')
-    label_encoder = joblib.load('emotion_model/label_encoder_lstm.pkl')
+    model = tf.keras.models.load_model('best_emotion_lstm_model.h5')
+    scaler = joblib.load('feature_scaler_lstm.pkl')
+    label_encoder = joblib.load('label_encoder_lstm.pkl')
     return model, scaler, label_encoder
 
 # Feature extraction function (same as in your training code)
