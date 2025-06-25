@@ -6,6 +6,9 @@ import joblib
 import os
 from scipy.io import wavfile
 import tempfile
+import sounddevice as sd
+import threading
+import time
 
 # Set page configuration
 st.set_page_config(
@@ -118,7 +121,31 @@ def extract_features(audio, sr):
     print(f"Final feature shape: {combined_features.shape}")
     return combined_features
 
-# Data augmentation functions (for reference, not used in prediction)
+# Real-time audio recording functions
+def record_audio(duration=3, sample_rate=22050):
+    """Record audio for specified duration"""
+    try:
+        st.info(f"🎤 Recording for {duration} seconds... Speak now!")
+        audio_data = sd.rec(int(duration * sample_rate), 
+                           samplerate=sample_rate, 
+                           channels=1, 
+                           dtype='float64')
+        sd.wait()  # Wait until recording is finished
+        return audio_data.flatten(), sample_rate
+    except Exception as e:
+        st.error(f"Error during recording: {str(e)}")
+        return None, None
+
+def save_recorded_audio(audio_data, sample_rate, filename):
+    """Save recorded audio to a temporary file"""
+    try:
+        # Convert to int16 for wav file
+        audio_int16 = (audio_data * 32767).astype(np.int16)
+        wavfile.write(filename, sample_rate, audio_int16)
+        return True
+    except Exception as e:
+        st.error(f"Error saving audio: {str(e)}")
+        return False
 def add_noise(audio, noise_factor=0.02):
     noise = np.random.randn(len(audio))
     return audio + noise_factor * noise
@@ -156,6 +183,159 @@ def predict_emotion(audio_file, model, scaler, label_encoder):
 
 # Main Streamlit app
 def main():
+    st.title("🎭 Speech Emotion Recognition")
+    st.write("Upload an audio file or record your voice to detect the emotion in the speech.")
+    
+    # Load models
+    try:
+        model, scaler, label_encoder = load_model()
+        st.success("✅ Model loaded successfully!")
+    except Exception as e:
+        st.error(f"Error loading model: {str(e)}")
+        return
+    
+    # Create tabs for different input methods
+    tab1, tab2 = st.tabs(["📁 Upload Audio File", "🎤 Record Voice"])
+    
+    with tab1:
+        st.subheader("Upload Audio File")
+        # File uploader
+        audio_file = st.file_uploader("Upload an audio file", type=["wav"])
+        
+        if audio_file is not None:
+            st.audio(audio_file, format="audio/wav")
+            
+            # Create a button to trigger prediction
+            if st.button("Detect Emotion from File", key="file_predict"):
+                with st.spinner("Analyzing audio..."):
+                    try:
+                        # Save uploaded file temporarily
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+                            tmp_file.write(audio_file.getvalue())
+                            tmp_file_path = tmp_file.name
+                        
+                        # Make prediction
+                        predicted_emotion, probabilities, emotion_labels = predict_emotion(
+                            tmp_file_path, model, scaler, label_encoder
+                        )
+                        
+                        # Delete temporary file
+                        os.unlink(tmp_file_path)
+                        
+                        # Display results
+                        display_results(predicted_emotion, probabilities, emotion_labels)
+                        
+                    except Exception as e:
+                        st.error(f"Error during prediction: {str(e)}")
+                        st.write("Please check if all model files are present and compatible.")
+    
+    with tab2:
+        st.subheader("Record Your Voice")
+        st.write("Click the button below to record a 3-second audio clip for emotion detection.")
+        
+        # Recording controls
+        col1, col2, col3 = st.columns([1, 1, 2])
+        
+        with col1:
+            record_duration = st.selectbox("Recording Duration", [2, 3, 4, 5], index=1)
+        
+        with col2:
+            if st.button("🎤 Start Recording", key="record_button"):
+                # Initialize session state for recording
+                if 'recording_done' not in st.session_state:
+                    st.session_state.recording_done = False
+                
+                # Record audio
+                audio_data, sample_rate = record_audio(duration=record_duration)
+                
+                if audio_data is not None:
+                    st.session_state.recorded_audio = audio_data
+                    st.session_state.sample_rate = sample_rate
+                    st.session_state.recording_done = True
+                    st.success("✅ Recording completed!")
+        
+        # Display recorded audio and prediction
+        if 'recording_done' in st.session_state and st.session_state.recording_done:
+            # Save recorded audio to temporary file for playback and processing
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+                tmp_file_path = tmp_file.name
+            
+            if save_recorded_audio(st.session_state.recorded_audio, 
+                                 st.session_state.sample_rate, 
+                                 tmp_file_path):
+                
+                # Display audio player
+                st.audio(tmp_file_path)
+                
+                # Predict emotion button
+                if st.button("🔍 Detect Emotion from Recording", key="record_predict"):
+                    with st.spinner("Analyzing recorded audio..."):
+                        try:
+                            # Make prediction
+                            predicted_emotion, probabilities, emotion_labels = predict_emotion(
+                                tmp_file_path, model, scaler, label_encoder
+                            )
+                            
+                            # Display results
+                            display_results(predicted_emotion, probabilities, emotion_labels)
+                            
+                        except Exception as e:
+                            st.error(f"Error during prediction: {str(e)}")
+                        finally:
+                            # Clean up temporary file
+                            if os.path.exists(tmp_file_path):
+                                os.unlink(tmp_file_path)
+                
+                # Clear recording button
+                if st.button("🗑️ Clear Recording", key="clear_record"):
+                    if 'recorded_audio' in st.session_state:
+                        del st.session_state.recorded_audio
+                    if 'sample_rate' in st.session_state:
+                        del st.session_state.sample_rate
+                    st.session_state.recording_done = False
+                    if os.path.exists(tmp_file_path):
+                        os.unlink(tmp_file_path)
+                    st.rerun()
+
+# Function to display prediction results
+def display_results(predicted_emotion, probabilities, emotion_labels):
+    """Display emotion prediction results"""
+    # Display results
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.success(f"Detected Emotion: {predicted_emotion.upper()}")
+        
+        # Create probability bar chart
+        import plotly.graph_objects as go
+        
+        fig = go.Figure(data=[
+            go.Bar(
+                x=probabilities * 100,
+                y=emotion_labels,
+                orientation='h',
+                marker_color='rgba(50, 171, 96, 0.6)',
+            )
+        ])
+        
+        fig.update_layout(
+            title="Emotion Probabilities",
+            xaxis_title="Probability (%)",
+            yaxis_title="Emotion",
+            width=600,
+            height=400
+        )
+        
+        st.plotly_chart(fig)
+    
+    with col2:
+        # Display confidence scores
+        st.subheader("Confidence Scores:")
+        for emotion, prob in zip(emotion_labels, probabilities):
+            st.write(f"{emotion}: {prob*100:.2f}%")
+
+# Main Streamlit app (updated)
+def main_old():
     st.title("🎭 Speech Emotion Recognition")
     st.write("Upload an audio file to detect the emotion in the speech.")
     
@@ -253,12 +433,29 @@ def main():
         - Sequence length: 130 time steps
         
         The model analyzes 3-second audio clips and outputs emotion probabilities.
+        
+        **Recording Tips:**
+        - Speak clearly and naturally
+        - Record in a quiet environment
+        - Use 3-4 seconds for best results
+        - Ensure your microphone is working properly
+        """)
+    
+    # Add installation instructions
+    with st.expander("🔧 Installation Requirements"):
+        st.code("""
+# Install required packages for audio recording:
+pip install sounddevice
+pip install scipy
+
+# For Linux users, you might need:
+sudo apt-get install libasound2-dev
         """)
     
     # Add footer
     st.markdown("""
     ---
-    Created with ❤️ using Streamlit | Model: BiLSTM with 194 Features
+    Created with ❤️ using Streamlit | Model: BiLSTM with 194 Features | Real-time Recording Enabled
     """)
 
 if __name__ == "__main__":
