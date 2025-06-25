@@ -9,5 +9,5 @@ scipy
 pandas
 matplotlib
 seaborn
-streamlit-webrtc
+sounddevice
 pydub
